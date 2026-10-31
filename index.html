@@ -424,7 +424,7 @@ table.grade th, table.grade td, table.comp th, table.comp td { border-color: var
     </div>
   </header>
 
-  <main id="vista" class="vista" aria-live="polite">
+  <main id="vista" class="vista">
     <div class="carregando">Carregando…</div>
   </main>
 
@@ -522,6 +522,9 @@ function urlMapa(it) { return 'https://www.google.com/maps/search/?api=1&query='
 function urlRotaPe(it) {
   return 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(consultaLugar(it)) + '&travelmode=walking';
 }
+function urlOnibus(it) {
+  return 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(consultaLugar(it)) + '&travelmode=transit';
+}
 function urlWhats(texto) { return 'https://wa.me/?text=' + encodeURIComponent(texto); }
 function chipLink(url, rotulo) {
   return '<a class="chip" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(rotulo) + '</a>';
@@ -534,7 +537,7 @@ function linksLugar(it) {
   if (!txt(it.nome)) return '';
   const temEnd = !!txt(it.endereco);
   const texto = txt(it.nome) + (temEnd ? ' — ' + txt(it.endereco) : '') + '\n' + urlMapa(it);
-  return (temEnd ? chipLink(urlMapa(it), 'Ver no Maps') + chipLink(urlRotaPe(it), 'Rota a pé') : '') + chipCompartilhar(texto);
+  return (temEnd ? chipLink(urlMapa(it), 'Ver no Maps') + chipLink(urlRotaPe(it), 'Rota a pé') + chipLink(urlOnibus(it), 'De ônibus') : '') + chipCompartilhar(texto);
 }
 // navigator.share dentro do iframe do Apps Script depende do allow "web-share"; sem ele, vai direto ao wa.me.
 function podeShare() {
@@ -555,6 +558,24 @@ function hojeISO() {
   const d = new Date(), p = n => String(n).padStart(2, '0');
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
+// Dia que as vistas tratam como "hoje": ?hoje=aaaa-mm-dd na URL, para testar a viagem antes dela.
+// Só para mostrar; a data do gasto continua sendo hojeISO().
+function hojeVista() {
+  const m = /[?&]hoje=(\d{4}-\d{2}-\d{2})(?:&|$)/.exec((window.location && window.location.search) || '');
+  return m ? m[1] : hojeISO();
+}
+/* fechado_em: datas da viagem em que o lugar fecha, "02/11, 03/11" ou "2026-11-02" (o Sheets converte uma data só).
+   Só afirma fechado; vazio, "confirmar" ou lixo = sem informação, nunca "aberto". */
+function datasFechado(v, ano) {
+  return txt(v).split(/[,;]/).map(t => {
+    t = t.trim();
+    let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+    if (m) return t;
+    m = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/.exec(t);
+    return m ? (m[3] || ano) + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0') : '';
+  }).filter(Boolean);
+}
+function fechadoEm(it, diaISO) { return datasFechado(it && it.fechado_em, txt(diaISO).slice(0, 4)).indexOf(diaISO) >= 0; }
 function dataBR(iso) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(txt(iso));
   return m ? m[3] + '/' + m[2] + '/' + m[1] : txt(iso);
@@ -639,7 +660,7 @@ function rpc(nome, ...args) {
 let _tAviso = 0;
 function toast(msg, erro) {
   const el = document.getElementById('aviso');
-  el.textContent = msg; el.className = 'toast' + (erro ? ' erro' : '');
+  el.className = 'toast' + (erro ? ' erro' : ''); el.textContent = msg;   // visível antes do texto, para o leitor de tela anunciar
   clearTimeout(_tAviso); _tAviso = setTimeout(() => el.classList.add('oculto'), erro ? 5000 : 2600);
 }
 function abrirFolha(titulo, html, larga) {
@@ -749,7 +770,7 @@ const ROTULOS = {
   distancia_base_km: 'distância da base', tempo_pe_min: 'a pé', uber_total: 'Uber (total)', uber_pp: 'Uber por pessoa', onibus: 'ônibus',
   horario: 'horário', aceita_grupo_9: 'grupo de 9', veg: 'veg', nota: 'nota', preco_inteira: 'inteira', preco_meia: 'meia',
   horario_funcionamento: 'horário', dias_fechado: 'fechado', duracao_min: 'duração', estrutura: 'estrutura', melhor_horario: 'melhor horário',
-  seguranca: 'segurança', mar: 'mar', data_evento: 'data', inicio: 'início', tipo: 'tipo'
+  seguranca: 'segurança', mar: 'mar', data_evento: 'data', inicio: 'início', tipo: 'tipo', fechado_em: 'fechado na viagem'
 };
 function rotuloDe(h) { return ROTULOS[h] || h.replace(/_/g, ' '); }
 function valorDe(h, v) {
@@ -757,10 +778,11 @@ function valorDe(h, v) {
   if (/_min$/.test(h)) { const n = num(v); return n === null ? txt(v) : (h === 'duracao_min' ? duracao(n) : n + ' min'); }
   if (/_km$/.test(h)) { const n = num(v); return n === null ? txt(v) : String(n).replace('.', ',') + ' km'; }
   if (h === 'data_evento') return dataBR(v);
+  if (h === 'fechado_em') { const ds = datasFechado(v, '2026'); return ds.length ? ds.map(d => d.slice(8, 10) + '/' + d.slice(5, 7)).join(', ') : ''; }
   return txt(v);
 }
 function fatos(item, chaves) {
-  const linhas = chaves.filter(h => txt(item[h]) !== '').map(h =>
+  const linhas = chaves.filter(h => txt(item[h]) !== '' && txt(valorDe(h, item[h])) !== '').map(h =>
     '<div><dt>' + esc(rotuloDe(h)) + '</dt><dd>' + esc(valorDe(h, item[h])) + '</dd></div>');
   return linhas.length ? '<dl class="fatos">' + linhas.join('') + '</dl>' : '';
 }
@@ -888,9 +910,9 @@ Acoes.irDia = function (el) {
 };
 
 /* ---------- clima 2–7/11 (Open-Meteo, direto do navegador; falha calada) ---------- */
-const CHAVE_CLIMA = 'viagem.clima.v1';
+const CHAVE_CLIMA = 'viagem.clima.v2';   // v2: com UV e pôr do sol; a cópia v1 (sem eles) fica para trás
 const URL_CLIMA = 'https://api.open-meteo.com/v1/forecast?latitude=-12.97&longitude=-38.51' +
-  '&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code' +
+  '&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code,uv_index_max,sunset' +
   '&timezone=America/Bahia&start_date=2026-11-02&end_date=2026-11-07';
 const CLIMA_VALIDADE_MS = 3 * 3600 * 1000;
 function ceuDe(c) {
@@ -909,7 +931,8 @@ function climaDeResposta(j) {
   if (!d || !Array.isArray(d.time)) return null;
   return d.time.map((dia, i) => ({
     dia, max: d.temperature_2m_max[i], min: d.temperature_2m_min[i],
-    chuva: d.precipitation_probability_max[i], ceu: ceuDe(d.weather_code[i])
+    chuva: d.precipitation_probability_max[i], ceu: ceuDe(d.weather_code[i]),
+    uv: d.uv_index_max ? d.uv_index_max[i] : null, por: d.sunset && d.sunset[i] ? String(d.sunset[i]).slice(11, 16) : ''
   }));
 }
 function garantirClima() {
@@ -967,6 +990,7 @@ function icsDe(s) {
     'BEGIN:VEVENT', 'UID:' + uid + '@viagem-salvador', 'DTSTAMP:' + agora,
     'DTSTART:' + utcStamp(s.dia, s.iniMin), 'DTEND:' + utcStamp(s.dia, s.fimMin),
     'SUMMARY:' + icsEsc(tituloAgenda(s)), 'LOCATION:' + icsEsc(localSessao(s)), 'DESCRIPTION:' + icsEsc(detalhesSessao(s)),
+    'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:' + icsEsc(tituloAgenda(s)), 'TRIGGER:-PT30M', 'END:VALARM',
     'END:VEVENT', 'END:VCALENDAR'].join('\r\n') + '\r\n';
 }
 function chaveSessao(s) { return [s.dia, s.inicio, s.pessoa, s.titulo || s.sessao].map(txt).join('|'); }
@@ -1010,8 +1034,42 @@ function htmlSessao(s, opt) {
     acoesSessao(s) + '</div>';
 }
 
+/* ---------- bloco "Hoje" (só nos dias da viagem) ---------- */
+const VIAGEM_DE = '2026-11-02', VIAGEM_ATE = '2026-11-07';
+const ABAS_FECHADO = ['Passeios', 'Museus', 'Noite', 'Praias', 'Restaurantes'];
+function hojeHtml() {
+  const dia = hojeVista(), d = App.dados;
+  if (dia < VIAGEM_DE || dia > VIAGEM_ATE) return '';
+  const linhas = [];
+  if (App.pessoa) {
+    const meu = (d.socine.agendas[App.pessoa] || []).filter(x => x.dia === dia)[0];
+    const ss = meu ? meu.meus : [];
+    linhas.push('<div><strong>Você:</strong> ' + (ss.length
+      ? ss.map(s => esc(s.inicio) + ' · ' + esc(s.titulo || s.sessao) + (txt(s.local) ? ' · ' + esc(s.local) : '')).join('; ')
+      : 'nenhuma sessão sua hoje.') + '</div>');
+  }
+  const noite = (d.listas.Noite ? d.listas.Noite.linhas : []).filter(it => txt(it.nome) && txt(it.data_evento) === dia)
+    .sort((a, b) => (txt(a.inicio) < txt(b.inicio) ? -1 : 1));
+  if (noite.length) {
+    linhas.push('<div><strong>Hoje à noite:</strong> ' + noite.map(it => (txt(it.inicio) ? esc(it.inicio) + ' ' : '') + esc(it.nome)).join('; ') + '</div>');
+  }
+  const fechados = [];
+  ABAS_FECHADO.forEach(a => { if (d.listas[a]) d.listas[a].linhas.forEach(it => { if (txt(it.nome) && fechadoEm(it, dia)) fechados.push(it.nome); }); });
+  if (fechados.length) linhas.push('<div><strong>Fechado hoje:</strong> ' + fechados.map(esc).join(', ') + '</div>');
+  const c = App.clima && App.clima.dias.filter(x => x.dia === dia)[0];
+  if (c) {
+    const n = v => (v == null ? '–' : Math.round(v));
+    linhas.push('<div><strong>Tempo:</strong> ' + n(c.max) + '° / ' + n(c.min) + '°' + (c.ceu ? ', ' + esc(c.ceu) : '') +
+      (c.chuva != null ? ', chuva ' + n(c.chuva) + '%' : '') + (c.uv != null ? ', UV ' + n(c.uv) : '') +
+      (c.por ? ', pôr do sol ' + esc(c.por) : '') + '</div>');
+  }
+  return '<section class="cartao hoje-bloco" aria-label="Hoje"><h2>Hoje, ' + esc(rotuloDia(dia)) + '</h2>' + linhas.join('') +
+    (fechados.length ? '<p class="micro mudo">"Fechado" vem da coluna fechado_em da planilha; lugar sem essa informação não aparece aqui. Confira o horário antes de ir.</p>' : '') +
+    '</section>';
+}
+
 function diaPessoaHtml(d, quem) {
-  const hoje = d.dia === hojeISO();
+  const hoje = d.dia === hojeVista();
   const meus = d.meus.map(s => htmlSessao(s)).join('');
   const colegas = d.colegas.length
     ? '<details class="colegas"><summary>Amigos neste dia (' + d.colegas.length + ')</summary>' +
@@ -1032,7 +1090,7 @@ function diaPessoaHtml(d, quem) {
 function trunc(s, n) { s = txt(s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
 function diaGrupoHtml(g) {
-  const hoje = g.dia === hojeISO();
+  const hoje = g.dia === hojeVista();
   const cab = '<div class="dia-titulo"><h2>' + esc(g.rotulo) + '</h2></div>';
   if (g.vazio) {
     return '<section class="dia' + (hoje ? ' hoje' : '') + '" id="dia-' + g.dia + '">' + cab +
@@ -1061,10 +1119,9 @@ Vistas.agenda = function () {
   const corpo = dias.map(x => quem === 'Grupo' ? diaGrupoHtml(x) : diaPessoaHtml(x, quem)).join('');
   const semDados = !d.socine.sessoes.length ? '<div class="vazio">A aba Socine ainda não tem sessões.</div>' : '';
   garantirClima();
-  return climaHtml() + '<div class="fila rolagem" aria-label="Ver agenda de">' + chips + '</div>' +
+  return hojeHtml() + climaHtml() + '<div class="fila rolagem" aria-label="Ver agenda de">' + chips + '</div>' +
     '<div class="fila rolagem" aria-label="Ir para o dia">' + pilulas + '</div>' +
     semDados + corpo +
-    (quem !== 'Grupo' ? '<p class="micro mudo">Sugestões de passeio para as brechas entram numa próxima versão.</p>' : '') +
     '<p class="micro mudo">Fonte: programação do XXIX Encontro Socine; conferência na aba Socine da planilha.</p>';
 };
 </script>
@@ -1268,8 +1325,9 @@ function cartaoGenerico(aba, it, cabs) {
     (txt(it.alternativa_porque) ? ' — ' + esc(it.alternativa_porque) : '') + '</div>' : '';
   const quando = aba === 'Noite' && (txt(it.data_evento) || txt(it.inicio))
     ? '<div class="selo aviso" style="justify-self:start">' + esc([dataBR(it.data_evento), it.inicio].map(txt).filter(Boolean).join(' · ')) + '</div>' : '';
+  const fechado = fechadoEm(it, hojeVista()) ? '<div class="selo erro" style="justify-self:start">fechado hoje</div>' : '';
   return '<article class="cartao" id="i-' + esc(aba) + '-' + esc(id) + '">' +
-    '<div class="cartao-topo"><div><h3>' + esc(it.nome) + '</h3><div class="meta">' + meta + '</div></div></div>' + quando +
+    '<div class="cartao-topo"><div><h3>' + esc(it.nome) + '</h3><div class="meta">' + meta + '</div></div></div>' + quando + fechado +
     (txt(it.descricao) ? '<p class="peq">' + esc(it.descricao) + '</p>' : '') +
     fatos(it, chaves.filter(h => !(aba === 'Noite' && (h === 'data_evento' || h === 'inicio')))) + alternativa +
     '<div class="acoes">' + (id ? botaoVoto(aba, id) : '') +
