@@ -462,9 +462,12 @@ const CHAVE_CACHE = 'viagem.cache.v1';
 const CHAVE_TEMA = 'viagem.tema';
 const TEMAS = { auto: 'Tema: auto', claro: 'Tema: claro', escuro: 'Tema: escuro' };
 
+// Sem localStorage (bloqueado ou cheio), guarda em memória enquanto a página estiver aberta.
+// A reserva só existe para chave cuja gravação falhou, e então vence o valor velho que ficou no aparelho.
+const _memReserva = {};
 const Mem = {
-  get(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } },
-  set(k, v) { try { window.localStorage.setItem(k, v); } catch (e) { /* sem armazenamento: segue sem lembrar */ } }
+  get(k) { if (k in _memReserva) return _memReserva[k]; try { return window.localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { window.localStorage.setItem(k, v); delete _memReserva[k]; } catch (e) { _memReserva[k] = v; } }
 };
 
 function esc(s) {
@@ -573,15 +576,55 @@ function msgErro(e) {
 }
 // Fora do Google (página hospedada), a ponte é um POST ao /exec; text/plain evita a checagem prévia do CORS.
 const URL_API = 'https://script.google.com/macros/s/AKfycbyv_Y3xrlaX_Yl433BPSnkSZ3t7j7-_TYzK_rX1d-q9p2JYVMgxY9LUkwOwcpKYL8my/exec';
+const TEMPO_LIMITE_MS = 30000;
+// Erro "incerto": o pedido pode ter chegado e gravado, só a resposta se perdeu. Quem grava mantém o id do pedido.
+function erroIncerto(grava) {
+  const e = new Error(grava ? 'A conexão falhou e pode ter gravado. Tocar de novo é seguro: não duplica.' : 'Sem conexão com o servidor.');
+  e.incerto = true;
+  return e;
+}
 async function rpcFetch(nome, args) {
-  let r;
+  const grava = nome !== 'apiCarregar';
+  const ctl = window.AbortController ? new AbortController() : null;
+  const relogio = ctl ? setTimeout(() => ctl.abort(), TEMPO_LIMITE_MS) : 0;
+  let r, j;
   try {
-    r = await fetch(URL_API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ fn: nome, args }) });
-  } catch (e) { throw new Error('Sem conexão com o servidor.'); }
-  let j;
-  try { j = await r.json(); } catch (e) { throw new Error('Resposta inválida do servidor (' + r.status + ').'); }
+    r = await fetch(URL_API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ fn: nome, args }), signal: ctl ? ctl.signal : undefined });
+    j = await r.json();
+  } catch (e) { throw erroIncerto(grava); }
+  finally { clearTimeout(relogio); }
   if (j.err) throw new Error(msgErro(j.err));
   return j.res;
+}
+
+/* ---------- id do pedido: o mesmo formulário reenviado leva o mesmo id, e o servidor não grava duas vezes ---------- */
+const CHAVE_PEDIDOS = 'viagem.pedidos';
+const VIDA_PEDIDO_MS = 6 * 3600 * 1000;   // o servidor lembra o id por 6 h
+function novoIdPedido() {
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (e) { /* segue */ }
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12).padEnd(10, '0');
+}
+const Pedidos = {
+  ler() { try { return JSON.parse(Mem.get(CHAVE_PEDIDOS) || '{}') || {}; } catch (e) { return {}; } },
+  gravar(m) { Mem.set(CHAVE_PEDIDOS, JSON.stringify(m)); },
+  // Mesmo conteúdo de um envio que ficou incerto reaproveita o id; conteúdo novo ganha id novo.
+  idPara(assinatura) {
+    const m = this.ler(), agora = Date.now();
+    Object.keys(m).forEach(k => { if (!(m[k] && agora - m[k].t < VIDA_PEDIDO_MS)) delete m[k]; });
+    if (!m[assinatura]) m[assinatura] = { id: novoIdPedido(), t: agora };
+    this.gravar(m);
+    return m[assinatura].id;
+  },
+  esquecer(assinatura) { const m = this.ler(); delete m[assinatura]; this.gravar(m); }
+};
+// Envia uma escrita com id e só esquece o id no sucesso. Em QUALQUER erro o id fica: o servidor pode ter
+// gravado e falhado depois (Sheets lento na releitura). Reaproveitar o id de uma recusa real é inofensivo,
+// porque o servidor só marca o id depois que a linha está na planilha; formulário corrigido muda a assinatura.
+async function rpcGravar(nome, assinatura, dados) {
+  dados.id_pedido = Pedidos.idPara(assinatura);
+  const r = await rpc(nome, dados);
+  Pedidos.esquecer(assinatura);
+  return r;
 }
 function rpc(nome, ...args) {
   if (!(window.google && google.script && google.script.run)) return rpcFetch(nome, args);
@@ -680,7 +723,8 @@ Acoes.votar = async function (el) {
     App.pendentesVoto--;
     setVotoLocal(aba, id, !novo);
     render(true);
-    toast('Voto não gravado: ' + e.message, true);
+    // Incerto: o voto pode ter entrado; repetir é seguro porque o servidor grava o valor pedido, não inverte.
+    toast(e.incerto ? 'Sem resposta do servidor; o voto pode ter entrado. Toque em Atualizar para conferir.' : 'Voto não gravado: ' + e.message, true);
   }
 };
 
@@ -1324,11 +1368,12 @@ Acoes.enviarSugestao = async function (form) {
   const botao = form.querySelector('button[type=submit]'), erro = document.getElementById('erro-sugestao');
   botao.disabled = true; botao.textContent = 'Enviando…'; erro.classList.add('oculto');
   try {
-    const r = await rpc('apiSugerir', { pessoa: App.pessoa, aba, senha: _senha, campos });
+    const assinatura = 'sug|' + JSON.stringify([App.pessoa, aba, campos]);
+    const r = await rpcGravar('apiSugerir', assinatura, { pessoa: App.pessoa, aba, senha: _senha, campos });
     App.dados.listas[r.aba] = r.lista;
     Mem.set(CHAVE_CACHE, JSON.stringify(App.dados));
     Acoes.fecharFolha(); render(true);
-    toast('Sugestão enviada. Fica marcada como não verificada.');
+    toast(r.repetido ? 'Essa sugestão já tinha chegado; não entrou de novo.' : 'Sugestão enviada. Fica marcada como não verificada.');
   } catch (e) {
     erro.textContent = e.message; erro.classList.remove('oculto');
     botao.disabled = false; botao.textContent = 'Enviar sugestão';
@@ -1419,15 +1464,17 @@ Acoes.enviarGasto = async function (form) {
   if (!dividir.length) { erro.textContent = 'Escolha entre quem dividir.'; erro.classList.remove('oculto'); return; }
   const botao = form.querySelector('button[type=submit]');
   botao.disabled = true; botao.textContent = 'Lançando…';
+  const dados = {
+    pessoa: App.pessoa, descricao: fd.get('descricao'), valor: String(valor), pagou: fd.get('pagou'),
+    dividir_entre: dividir, data: fd.get('data'), categoria: fd.get('categoria')
+  };
+  const assinatura = 'gasto|' + JSON.stringify([dados.pessoa, txt(dados.descricao), dados.valor, dados.pagou, dividir.slice().sort(), dados.data, dados.categoria]);
   try {
-    const r = await rpc('apiLancarGasto', {
-      pessoa: App.pessoa, descricao: fd.get('descricao'), valor: String(valor), pagou: fd.get('pagou'),
-      dividir_entre: dividir, data: fd.get('data'), categoria: fd.get('categoria')
-    });
+    const r = await rpcGravar('apiLancarGasto', assinatura, dados);
     App.dados.gastos = r.gastos;
     Mem.set(CHAVE_CACHE, JSON.stringify(App.dados));
     Acoes.fecharFolha(); render(true);
-    toast('Gasto lançado.');
+    toast(r.repetido ? 'Esse gasto já estava lançado; não entrou de novo.' : 'Gasto lançado.');
   } catch (e) {
     erro.textContent = e.message; erro.classList.remove('oculto');
     botao.disabled = false; botao.textContent = 'Lançar';
@@ -1446,7 +1493,9 @@ Acoes.estornar = async function (el) {
     const r = await rpc('apiEstornarGasto', App.pessoa, el.dataset.reg);
     App.dados.gastos = r.gastos; render(true); toast('Lançamento estornado.');
   } catch (e) {
-    el.disabled = false; toast('Não estornou: ' + e.message, true);
+    // Tentativa repetida de um estorno que entrou na primeira vez: é sucesso, só falta a lista nova.
+    if (/ja foi estornado/i.test(e.message)) { toast('Esse lançamento já estava estornado.'); carregar(true); return; }
+    el.disabled = false; toast(e.incerto ? 'Sem resposta do servidor; o estorno pode ter entrado. Toque em Atualizar para conferir.' : 'Não estornou: ' + e.message, true);
   }
 };
 </script>
