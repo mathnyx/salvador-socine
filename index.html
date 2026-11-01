@@ -223,6 +223,7 @@ textarea { min-height: 80px; resize: vertical; }
 .selo.ok { background: var(--cor-ok-suave); color: var(--cor-ok); }
 .selo.aviso { background: var(--cor-aviso-suave); color: var(--cor-aviso); }
 .selo.erro { background: var(--cor-erro-suave); color: var(--cor-erro); }
+.aviso-linha { background: var(--cor-aviso-suave); color: var(--cor-aviso); padding: 8px 12px; border-radius: var(--raio); margin: 8px 0; }
 .fatos { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 14px; margin: 0; }
 .fatos div { display: grid; }
 .fatos dt { font-size: var(--tam-micro); color: var(--cor-tinta-2); }
@@ -640,6 +641,12 @@ function datasFechado(v, ano) {
   }).filter(Boolean);
 }
 function fechadoEm(it, diaISO) { return datasFechado(it && it.fechado_em, txt(diaISO).slice(0, 4)).indexOf(diaISO) >= 0; }
+function idadeCopia() {
+  const g = txt(App.dados && App.dados.geradoEm);
+  return g ? dataBR(g).slice(0, 5) + ' às ' + g.slice(11, 16) : 'antes';
+}
+/* Dados mudados no lugar (gasto, estorno, sugestão): a busca refaz o índice. */
+function dadosMudaram() { if (typeof _indiceDe !== 'undefined') _indiceDe = null; }
 function dataBR(iso) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(txt(iso));
   return m ? m[3] + '/' + m[2] + '/' + m[1] : txt(iso);
@@ -932,7 +939,7 @@ function render(manterScroll) {
   catch (e) { alvo.innerHTML = '<div class="vazio">Erro ao montar esta tela: ' + esc(e.message) + '</div>'; if (window.console) console.error(e); }
   if (typeof pintarBarraComparar === 'function') pintarBarraComparar();
   if (manterScroll) window.scrollTo(0, y);
-  document.getElementById('sub-topo').textContent = '2 a 7 de novembro' + (App.desatualizado ? ' · sem conexão, mostrando a última cópia' : '');
+  document.getElementById('sub-topo').textContent = '2 a 7 de novembro' + (App.desatualizado ? ' · sem conexão, mostrando a cópia de ' + idadeCopia() : '');
 }
 
 async function carregar(forcar, avisar) {
@@ -944,7 +951,8 @@ async function carregar(forcar, avisar) {
     Mem.set(CHAVE_CACHE, JSON.stringify(d));
     const salvo = Mem.get(CHAVE_PESSOA);
     if (salvo && nomes().some(n => norm(n) === norm(salvo))) definirPessoa(nomes().filter(n => norm(n) === norm(salvo))[0]);
-    else if (App.pessoa && !nomes().some(souEu)) definirPessoa('');
+    // Nome sumiu da lista (aba Pessoas em edição): esquece só nesta tela; o guardado volta quando a lista voltar.
+    else if (App.pessoa && !nomes().some(souEu)) { App.pessoa = ''; atualizarChipPessoa(); }
     render(true);
     if (avisar) toast('Dados atualizados.');
     if (!App.pessoa && !folhaAberta()) Acoes.escolherPessoa();
@@ -1059,13 +1067,15 @@ function utcStamp(dia, min) {
   const d = new Date(Date.UTC(p[0], p[1] - 1, p[2]) + (min + 180) * 60000);
   return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 }
-function localSessao(s) { return [s.local, /ufba/i.test(txt(s.local)) ? '' : 'UFBA', CIDADE].map(txt).filter(Boolean).join(', '); }
+// Evento fora da Socine (ABOCA etc.) não leva UFBA no endereço nem "Socine" no título.
+function foraDaSocine(s) { return /fora da socine/i.test(txt(s.sessao)); }
+function localSessao(s) { return [s.local, /ufba/i.test(txt(s.local)) || foraDaSocine(s) ? '' : 'UFBA', CIDADE].map(txt).filter(Boolean).join(', '); }
 function detalhesSessao(s) {
   return [s.titulo && s.sessao ? s.sessao : '', s.coordenacao ? 'Coordenação: ' + s.coordenacao : '',
-    s.pessoa && !s.todos ? 'Apresenta: ' + s.pessoa : '', s.fimEstimado ? 'Término estimado.' : '', 'XXIX Encontro Socine']
+    s.pessoa && !s.todos ? 'Apresenta: ' + s.pessoa : '', s.fimEstimado ? 'Término estimado.' : '', foraDaSocine(s) ? 'Programa do grupo na viagem' : 'XXIX Encontro Socine']
     .map(txt).filter(Boolean).join('\n');
 }
-function tituloAgenda(s) { return 'Socine: ' + txt(s.titulo || s.sessao); }
+function tituloAgenda(s) { return (foraDaSocine(s) ? '' : 'Socine: ') + txt(s.titulo || s.sessao); }
 function urlGoogleAgenda(s) {
   return 'https://calendar.google.com/calendar/render?action=TEMPLATE' +
     '&text=' + encodeURIComponent(tituloAgenda(s)) +
@@ -1139,7 +1149,7 @@ function hojeHtml() {
       ? ss.map(s => esc(s.inicio) + ' · ' + esc(s.titulo || s.sessao) + (txt(s.local) ? ' · ' + esc(s.local) : '')).join('; ')
       : 'nenhuma sessão sua hoje.') + '</div>');
   }
-  const noite = (d.listas.Noite ? d.listas.Noite.linhas : []).filter(it => txt(it.nome) && txt(it.data_evento) === dia)
+  const noite = (d.listas.Noite ? d.listas.Noite.linhas : []).filter(it => txt(it.nome) && datasFechado(it.data_evento, dia.slice(0, 4))[0] === dia)
     .sort((a, b) => (txt(a.inicio) < txt(b.inicio) ? -1 : 1));
   if (noite.length) {
     linhas.push('<div><strong>Hoje à noite:</strong> ' + noite.map(it => (txt(it.inicio) ? esc(it.inicio) + ' ' : '') + esc(it.nome)).join('; ') + '</div>');
@@ -1209,10 +1219,12 @@ Vistas.agenda = function () {
   const pilulas = dias.map(x => '<button class="chip" data-acao="irDia" data-dia="' + x.dia + '">' + esc(x.rotulo) + '</button>').join('');
   const corpo = dias.map(x => quem === 'Grupo' ? diaGrupoHtml(x) : diaPessoaHtml(x, quem)).join('');
   const semDados = !d.socine.sessoes.length ? '<div class="vazio">A aba Socine ainda não tem sessões.</div>' : '';
+  const ign = d.socine.ignoradas || 0;
+  const avisoIgn = ign ? '<p class="peq aviso-linha">' + ign + (ign > 1 ? ' linhas' : ' linha') + ' da aba Socine sem dia ou hora legíveis ficaram fora da agenda (use 2026-11-05 e 19:00).</p>' : '';
   garantirClima();
   return hojeHtml() + climaHtml() + '<div class="fila rolagem" aria-label="Ver agenda de">' + chips + '</div>' +
     '<div class="fila rolagem" aria-label="Ir para o dia">' + pilulas + '</div>' +
-    semDados + corpo +
+    semDados + avisoIgn + corpo +
     '<p class="micro mudo">Fonte: programação do XXIX Encontro Socine; conferência na aba Socine da planilha.</p>';
 };
 </script>
@@ -1538,7 +1550,7 @@ Acoes.enviarSugestao = async function (form) {
   try {
     const assinatura = 'sug|' + JSON.stringify([App.pessoa, aba, campos]);
     const r = await rpcGravar('apiSugerir', assinatura, { pessoa: App.pessoa, aba, senha: _senha, campos });
-    App.dados.listas[r.aba] = r.lista;
+    App.dados.listas[r.aba] = r.lista; dadosMudaram();
     Mem.set(CHAVE_CACHE, JSON.stringify(App.dados));
     Acoes.fecharFolha(); render(true);
     toast(r.repetido ? 'Essa sugestão já tinha chegado; não entrou de novo.' : 'Sugestão enviada. Fica marcada como não verificada.');
@@ -1559,10 +1571,19 @@ function dividirTexto(lista) {
   return part.length <= 4 ? part.join(', ') : part.length + ' pessoas';
 }
 
-function linhaGasto(g, i) {
+/* Mesmo pagador, mesmo valor, mesma data, nenhum estornado: provável lançamento em dois celulares.
+   Só marca; duas parcelas iguais de verdade continuam valendo. */
+function chaveRepetido(g) { return g.ehEstorno || g.estornado || g.categoria === 'acerto' || g.valor == null ? '' : [norm(g.pagou), Math.round(g.valor * 100), txt(g.data)].join('|'); }
+function repetidos(lista) {
+  const n = {};
+  lista.forEach(g => { const k = chaveRepetido(g); if (k) n[k] = (n[k] || 0) + 1; });
+  return n;
+}
+function linhaGasto(g, i, rep) {
   const podeEstornar = !g.ehEstorno && !g.estornado;
+  const dup = rep && chaveRepetido(g) && rep[chaveRepetido(g)] > 1;
   return '<div id="g-' + i + '" class="gasto' + (g.ehEstorno || g.estornado ? ' estorno' : '') + '">' +
-    '<div><strong>' + esc(g.descricao) + '</strong>' + (g.estornado ? ' <span class="selo erro">estornado</span>' : '') +
+    '<div><strong>' + esc(g.descricao) + '</strong>' + (g.estornado ? ' <span class="selo erro">estornado</span>' : '') + (dup ? ' <span class="selo aviso">repetido?</span>' : '') +
     '<div class="meta">' + esc(dataBR(g.data)) + (g.categoria === 'acerto'
       ? ' · ' + esc(g.pagou) + ' pagou a ' + esc(g.dividir_entre) + ' · acerto'
       : ' · pagou ' + esc(g.pagou) + ' · para ' + esc(dividirTexto(g.dividir_entre)) + (g.categoria ? ' · ' + esc(g.categoria) : '')) + '</div></div>' +
@@ -1589,9 +1610,13 @@ Vistas.gastos = function () {
   const eu = g.saldos.filter(s => souEu(s.pessoa))[0];
   const resumoEu = eu ? '<p class="peq">' + (eu.centavos > 0 ? 'Você tem <strong class="pos-txt">' + moeda2(eu.centavos) + '</strong> a receber.'
     : eu.centavos < 0 ? 'Você deve <strong class="neg-txt">' + moeda2(-eu.centavos) + '</strong>.' : 'Você está quite.') + '</p>' : '';
-  const lanc = g.lista.length ? g.lista.map(linhaGasto).join('') : '<p class="peq mudo">Nenhum gasto lançado ainda.</p>';
+  const rep = repetidos(g.lista);
+  const nRep = Object.keys(rep).filter(k => rep[k] > 1).length;
+  const lanc = g.lista.length ? g.lista.map((x, i) => linhaGasto(x, i, rep)).join('') : '<p class="peq mudo">Nenhum gasto lançado ainda.</p>';
+  const avisos = (nRep ? '<p class="peq aviso-linha">Há lançamento marcado "repetido?": mesmo pagador, valor e dia. Se for o mesmo gasto lançado duas vezes, estorne um.</p>' : '') +
+    (g.ignorados ? '<p class="peq aviso-linha">' + g.ignorados + (g.ignorados > 1 ? ' linhas' : ' linha') + ' da aba Gastos com valor ou pagador ilegível ficaram fora da conta.</p>' : '');
   return '<div class="fila" style="justify-content:space-between"><h2>Gastos</h2><span class="peq mudo">total lançado ' + moeda2(g.totalCentavos) + '</span></div>' +
-    '<button class="btn primario" style="width:100%" data-acao="novoGasto">Lançar gasto</button>' +
+    '<button class="btn primario" style="width:100%" data-acao="novoGasto">Lançar gasto</button>' + avisos +
     '<section class="cartao"><h3>Saldo de cada um</h3>' + resumoEu + '<div class="saldos">' + linhasSaldo + '</div>' +
     '<p class="micro mudo">Verde: tem a receber. Vermelho: deve ao grupo.</p></section>' +
     '<section class="cartao"><h3>Quem paga a quem</h3><div>' + transf + '</div></section>' +
@@ -1632,7 +1657,7 @@ Acoes.enviarAcerto = async function (form) {
   const assinatura = 'acerto|' + JSON.stringify([dados.pessoa, de, para, dados.valor, dados.data]);
   try {
     const r = await rpcGravar('apiLancarGasto', assinatura, dados);
-    App.dados.gastos = r.gastos;
+    App.dados.gastos = r.gastos; dadosMudaram();
     Mem.set(CHAVE_CACHE, JSON.stringify(App.dados));
     Acoes.fecharFolha(); render(true);
     toast(r.repetido ? 'Esse pagamento já estava registrado; não entrou de novo.' : 'Pagamento registrado.');
@@ -1687,10 +1712,13 @@ Acoes.enviarGasto = async function (form) {
   const assinatura = 'gasto|' + JSON.stringify([dados.pessoa, txt(dados.descricao), dados.valor, dados.pagou, dividir.slice().sort(), dados.data, dados.categoria]);
   try {
     const r = await rpcGravar('apiLancarGasto', assinatura, dados);
-    App.dados.gastos = r.gastos;
+    App.dados.gastos = r.gastos; dadosMudaram();
     Mem.set(CHAVE_CACHE, JSON.stringify(App.dados));
     Acoes.fecharFolha(); render(true);
-    toast(r.repetido ? 'Esse gasto já estava lançado; não entrou de novo.' : 'Gasto lançado.');
+    const k = chaveRepetido({ pagou: dados.pagou, valor: valor, data: dados.data, categoria: dados.categoria });
+    const dup = !r.repetido && k && (repetidos(r.gastos.lista)[k] || 0) > 1;
+    toast(r.repetido ? 'Esse gasto já estava lançado; não entrou de novo.'
+      : dup ? 'Lançado, mas já havia um gasto igual de ' + dados.pagou + ' nesse dia. Se for o mesmo, estorne um.' : 'Gasto lançado.', dup);
   } catch (e) {
     erro.textContent = e.message; erro.classList.remove('oculto');
     botao.disabled = false; botao.textContent = 'Lançar';
@@ -1707,7 +1735,7 @@ Acoes.estornar = async function (el) {
   el.disabled = true;
   try {
     const r = await rpc('apiEstornarGasto', App.pessoa, el.dataset.reg);
-    App.dados.gastos = r.gastos; render(true); toast('Lançamento estornado.');
+    App.dados.gastos = r.gastos; dadosMudaram(); render(true); toast('Lançamento estornado.');
   } catch (e) {
     // Tentativa repetida de um estorno que entrou na primeira vez: é sucesso, só falta a lista nova.
     if (/ja foi estornado/i.test(e.message)) { toast('Esse lançamento já estava estornado.'); carregar(true); return; }
