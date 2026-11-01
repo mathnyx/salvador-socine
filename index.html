@@ -405,6 +405,22 @@ table.grade th, table.grade td, table.comp th, table.comp td { border-color: var
 .fatos { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .cartao, .alternativa, .proveniencia, .fatos dd { overflow-wrap: anywhere; }
 .cartao h3, .cartao-topo h3 { overflow-wrap: break-word; }
+/* busca: a barra é o que fica preso no topo; o título rola embora */
+.topo { position: static; }
+.barra-busca { position: sticky; top: 0; z-index: 20; background: var(--cor-fundo); border-bottom: 1px solid var(--cor-linha); padding: 8px var(--esp); }
+.barra-busca-in { max-width: var(--largura-max); margin: 0 auto; position: relative; }
+.barra-busca input[type="search"] { width: 100%; min-height: 42px; padding: 8px 40px 8px 12px; border: 1px solid var(--cor-linha); border-radius: var(--raio-peq); background: var(--cor-superficie); font-size: 16px; color: inherit; -webkit-appearance: none; appearance: none; }
+.barra-busca input[type="search"]::-webkit-search-cancel-button { display: none; }
+.barra-busca input[type="search"]:focus { outline: 2px solid var(--cor-destaque-forte); outline-offset: -1px; }
+.busca-limpar { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border: 0; background: none; font-size: 22px; color: var(--cor-tinta-2); }
+.busca-grupo { display: grid; gap: 0; }
+.busca-grupo h2 { font-size: 20px; border-bottom: 1px solid var(--cor-linha); padding-bottom: 4px; margin-bottom: 2px; }
+.busca-item { display: grid; gap: 2px; text-align: left; width: 100%; background: none; border: 0; border-bottom: var(--borda-pontilhada); padding: 10px 0; color: inherit; font: inherit; min-width: 0; overflow-wrap: anywhere; }
+.busca-tit { font-family: var(--fonte-titulo); font-weight: 600; font-size: 17px; line-height: 1.25; }
+.busca-item mark { background: var(--cor-destaque-suave); color: inherit; border-bottom: 1px solid var(--cor-destaque-forte); padding: 0 1px; }
+.sessao.destaque, td.ocupado.destaque, .gasto.destaque, [id^="info-"].destaque { outline: 2px solid var(--cor-destaque); outline-offset: 2px; }
+.dia, .cartao, .gasto, [id^="info-"] { scroll-margin-top: 70px; }
+
 @media (max-width: 560px) {
   .topo { padding: 8px var(--esp); }
   .topo-in { flex-wrap: wrap; align-items: center; row-gap: 6px; }
@@ -440,6 +456,12 @@ table.grade th, table.grade td, table.comp th, table.comp td { border-color: var
       </div>
     </div>
   </header>
+  <div class="barra-busca" role="search">
+    <div class="barra-busca-in">
+      <input id="busca" type="search" placeholder="Buscar restaurante, prato, praia, sessão…" aria-label="Buscar em todo o app" autocomplete="off" enterkeyhint="search">
+      <button class="busca-limpar oculto" id="busca-limpar" data-acao="limparBusca" aria-label="Limpar busca">×</button>
+    </div>
+  </div>
 
   <main id="vista" class="vista">
     <div class="carregando">Carregando…</div>
@@ -462,7 +484,7 @@ table.grade th, table.grade td, table.comp th, table.comp td { border-color: var
 'use strict';
 /* ====================== estado, utilitários, ponte com o servidor ====================== */
 const App = {
-  dados: null, pessoa: '', aba: 'agenda', ultimaCarga: 0, pendentesVoto: 0, desatualizado: false,
+  dados: null, pessoa: '', aba: 'agenda', busca: '', ultimaCarga: 0, pendentesVoto: 0, desatualizado: false,
   ui: {
     agenda: { quem: null },
     comer: { faixas: [], veg: false, ordem: 'padrao', comparar: [], abertos: [] },
@@ -824,6 +846,7 @@ function pintarNav() {
     '<button data-acao="irAba" data-aba="' + id + '"' + (App.aba === id ? ' aria-current="page"' : '') + '>' + nome + '</button>').join('');
 }
 Acoes.irAba = function (el) {
+  if (App.busca && typeof limparBusca === 'function') limparBusca(true);
   App.aba = el.dataset.aba;
   Mem.set(CHAVE_ABA, App.aba);
   window.scrollTo(0, 0);
@@ -857,7 +880,7 @@ function render(manterScroll) {
     return;
   }
   const y = window.scrollY;
-  const v = Vistas[App.aba] || Vistas.agenda;
+  const v = (App.busca && Vistas.busca) || Vistas[App.aba] || Vistas.agenda;
   try { alvo.innerHTML = v(); }
   catch (e) { alvo.innerHTML = '<div class="vazio">Erro ao montar esta tela: ' + esc(e.message) + '</div>'; if (window.console) console.error(e); }
   if (typeof pintarBarraComparar === 'function') pintarBarraComparar();
@@ -888,6 +911,7 @@ async function carregar(forcar, avisar) {
 
 function iniciar() {
   aplicarTema(Mem.get(CHAVE_TEMA));
+  if (typeof iniciarBusca === 'function') iniciarBusca();
   document.addEventListener('click', ev => {
     const el = ev.target.closest('[data-acao]');
     if (!el) return;
@@ -1354,17 +1378,18 @@ function cartaoGenerico(aba, it, cabs) {
     proveniencia(it) + '</article>';
 }
 
+function infoLinhas() { return App.dados.listas.Info.linhas.filter(r => txt(r.titulo) || txt(r.texto)); }
 function infoHtml() {
-  const L = App.dados.listas.Info.linhas.filter(r => txt(r.titulo) || txt(r.texto));
+  const L = infoLinhas();
   if (!L.length) return '<div class="vazio">Ainda não há informações práticas na planilha.</div>';
   const grupos = [], idx = {};
-  L.forEach(r => {
+  L.forEach((r, i) => {
     const s = txt(r.secao) || 'Geral';
     if (!(s in idx)) { idx[s] = grupos.length; grupos.push({ secao: s, itens: [] }); }
-    grupos[idx[s]].itens.push(r);
+    grupos[idx[s]].itens.push({ r, i });   // i = posição em infoLinhas(), alvo da busca (id info-i)
   });
-  return grupos.map(g => '<section class="cartao"><h3>' + esc(g.secao) + '</h3>' + g.itens.map(r =>
-    '<div>' + (txt(r.titulo) ? '<strong>' + esc(r.titulo) + '</strong>' : '') +
+  return grupos.map(g => '<section class="cartao"><h3>' + esc(g.secao) + '</h3>' + g.itens.map(({ r, i }) =>
+    '<div id="info-' + i + '">' + (txt(r.titulo) ? '<strong>' + esc(r.titulo) + '</strong>' : '') +
     (txt(r.texto) ? '<p class="peq txt-corrido">' + linkar(r.texto) + '</p>' : '') +
     proveniencia({ fonte: r.fonte, acesso_em: r.acesso_em, verificado: 'sim', sugerido_por: '' }).replace('<span class="selo ok">verificado</span>', '') + '</div>').join('<hr style="border:0;border-top:1px solid var(--cor-linha);width:100%">') +
     '</section>').join('');
@@ -1486,9 +1511,9 @@ function dividirTexto(lista) {
   return part.length <= 4 ? part.join(', ') : part.length + ' pessoas';
 }
 
-function linhaGasto(g) {
+function linhaGasto(g, i) {
   const podeEstornar = !g.ehEstorno && !g.estornado;
-  return '<div class="gasto' + (g.ehEstorno || g.estornado ? ' estorno' : '') + '">' +
+  return '<div id="g-' + i + '" class="gasto' + (g.ehEstorno || g.estornado ? ' estorno' : '') + '">' +
     '<div><strong>' + esc(g.descricao) + '</strong>' + (g.estornado ? ' <span class="selo erro">estornado</span>' : '') +
     '<div class="meta">' + esc(dataBR(g.data)) + (g.categoria === 'acerto'
       ? ' · ' + esc(g.pagou) + ' pagou a ' + esc(g.dividir_entre) + ' · acerto'
@@ -1641,6 +1666,218 @@ Acoes.estornar = async function (el) {
     el.disabled = false; toast(e.incerto ? 'Sem resposta do servidor; o estorno pode ter entrado. Toque em Atualizar para conferir.' : 'Não estornou: ' + e.message, true);
   }
 };
+</script>
+
+  <script>
+/* ====================== BUSCA (tudo do app numa barra só) ====================== */
+// Sem acento e sem maiúscula; todas as palavras digitadas precisam aparecer (em qualquer campo do item).
+const MAX_RESULTADOS = 80;
+const CAMPOS_FORA = ['id', 'fonte', 'acesso_em', 'verificado', 'link', 'link_cardapio', 'alternativa_id', 'lat', 'lng'];
+// Palavras que o amigo digita e a planilha escreve de outro jeito.
+const APELIDOS = [
+  [/barco|lancha|escuna|catamar|saveiro|ferry|travessia/, 'barco passeio de barco'],
+  [/praia/, 'praia mar'],
+  [/museu/, 'museu exposicao'],
+  [/igreja|basilica|catedral|santuario/, 'igreja'],
+  [/show|festa|samba|forro|bar\b|boteco/, 'noite sair bar']
+];
+
+function textoDe(it, chaves) {
+  return chaves.filter(k => CAMPOS_FORA.indexOf(k) < 0).map(k => txt(it[k])).filter(Boolean).join(' · ');
+}
+function apelidos(s) { const n = norm(s); return APELIDOS.filter(a => a[0].test(n)).map(a => a[1]).join(' '); }
+
+/* cada entrada: { grupo, titulo, sub, alvo, nomeN, tudoN, campos: [[rotulo, texto]] } */
+function indiceBusca() {
+  const d = App.dados, E = [];
+  const veg = v => { const n = nivelVeg(v); return n === 2 ? 'vegano vegetariano veg' : n ? 'vegetariano veg' : ''; };
+  restaurantes().forEach(r => {
+    const pratos = (d.pratos.porRestaurante[txt(r.id)] || []).map(p => txt(p.prato) + (nivelVeg(p.veg) ? ' (veg)' : ''));
+    const campos = [['', [r.categoria, r.bairro].map(txt).filter(Boolean).join(' · ')], ['', txt(r.descricao)],
+      ['pratos', pratos.join(', ')], ['endereço', txt(r.endereco)], ['horário', txt(r.horario)], ['veg', txt(r.veg)]];
+    E.push({ grupo: 'Restaurantes', titulo: r.nome, sub: [r.categoria, r.bairro, r.faixa_preco].map(txt).filter(Boolean).join(' · '),
+      alvo: { tipo: 'rest', id: txt(r.id), nome: txt(r.nome) }, campos,
+      extra: 'restaurante comer comida almoco jantar ' + veg(r.veg) + ' ' + pratos.map(veg).join(' ') });
+  });
+  ['Passeios', 'Museus', 'Praias', 'Noite'].forEach(aba => {
+    if (!d.listas[aba]) return;
+    const cabs = d.listas[aba].cabecalhos;
+    itensDe(aba).forEach(it => {
+      const quando = aba === 'Noite' ? [dataBR(it.data_evento), it.inicio].map(txt).filter(Boolean).join(' · ') : '';
+      E.push({ grupo: aba, titulo: it.nome, sub: [it.tipo, it.bairro, quando].map(txt).filter(Boolean).join(' · '),
+        alvo: { tipo: 'item', aba, id: txt(it.id), nome: txt(it.nome) },
+        campos: [['', txt(it.descricao)], ['', textoDe(it, cabs.filter(h => ['nome', 'descricao'].indexOf(h) < 0))]],
+        extra: aba + ' ' + apelidos(it.tipo + ' ' + it.nome) });
+    });
+  });
+  infoLinhas().forEach((r, i) => {
+    E.push({ grupo: 'Info prática', titulo: txt(r.titulo) || txt(r.secao), sub: txt(r.secao),
+      alvo: { tipo: 'info', i }, campos: [['', txt(r.texto)]], extra: 'info pratica dica' });
+  });
+  d.socine.sessoes.forEach(s => {
+    E.push({ grupo: 'Socine', titulo: txt(s.titulo) || txt(s.sessao),
+      sub: [s.todos ? 'todos' : s.pessoa, rotuloDiaCurto(s.dia), s.inicio, s.local].map(txt).filter(Boolean).join(' · '),
+      alvo: { tipo: 'sessao', dia: txt(s.dia), pessoa: s.todos ? 'Grupo' : txt(s.pessoa), titulo: txt(s.titulo) || txt(s.sessao) },
+      campos: [['sessão', txt(s.sessao)], ['coordenação', txt(s.coordenacao)], ['', txt(s.pessoa)], ['', txt(s.local)]],
+      extra: 'socine agenda apresentacao sessao ' + rotuloDiaCurto(s.dia) });
+  });
+  d.gastos.lista.forEach((g, i) => {
+    E.push({ grupo: 'Gastos', titulo: txt(g.descricao), sub: [dataBR(g.data), 'pagou ' + txt(g.pagou), g.valor == null ? '' : moeda2(Math.round(g.valor * 100))].filter(Boolean).join(' · '),
+      alvo: { tipo: 'gasto', i }, campos: [['', txt(g.categoria)], ['para', txt(g.dividir_entre)]], extra: 'gasto despesa conta' });
+  });
+  E.forEach(e => {
+    e.nomeN = norm(e.titulo);
+    e.tudoN = norm([e.titulo, e.sub, e.extra].concat(e.campos.map(c => c[1])).join(' '));
+  });
+  return E;
+}
+function rotuloDiaCurto(dia) { try { return typeof rotuloDia === 'function' ? rotuloDia(dia) : dia; } catch (e) { return dia; } }
+
+/* o índice só se refaz quando os dados mudam */
+let _indice = null, _indiceDe = null;
+function indice() { if (_indiceDe !== App.dados) { _indice = indiceBusca(); _indiceDe = App.dados; } return _indice; }
+
+function buscar(q, E) {
+  const termos = norm(q).split(/\s+/).filter(Boolean);
+  if (!termos.length) return [];
+  const R = [];
+  E.forEach((e, ordem) => {
+    if (!termos.every(t => e.tudoN.indexOf(t) >= 0)) return;
+    // começo de palavra vale mais que pedaço no meio dela ("uber" acha a dica de Uber antes do Cine Glauber)
+    let p = 0;
+    termos.forEach(t => {
+      const inicio = new RegExp('(^|[^a-z0-9])' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      if (e.nomeN.indexOf(t) === 0) p += 30;
+      else if (inicio.test(e.nomeN)) p += 20;
+      else if (inicio.test(norm(e.sub))) p += 8;
+      else if (inicio.test(e.tudoN)) p += 6;
+      else if (e.nomeN.indexOf(t) >= 0) p += 3;
+      else p += 1;
+    });
+    R.push({ e, p, ordem });
+  });
+  return R.sort((a, b) => b.p - a.p || a.ordem - b.ordem).map(x => x.e);
+}
+
+/* trecho do campo que casou, com o termo marcado */
+function trechoCasado(e, termos) {
+  for (const [rot, t] of e.campos) {
+    const n = norm(t);
+    // só o termo que não está à vista no título nem na linha de baixo (senão o trecho repete o que já se lê)
+    const termo = termos.filter(x => n.indexOf(x) >= 0 && e.nomeN.indexOf(x) < 0 && norm(e.sub).indexOf(x) < 0)[0];
+    if (!termo) continue;
+    const i = n.indexOf(termo), ini = Math.max(0, i - 40), fim = Math.min(t.length, i + termo.length + 60);
+    // norm() preserva o comprimento (NFD tira só as marcas combinantes), então o índice vale no texto original
+    const pedaco = (ini ? '…' : '') + esc(t.slice(ini, i)) + '<mark>' + esc(t.slice(i, i + termo.length)) + '</mark>' + esc(t.slice(i + termo.length, fim)) + (fim < t.length ? '…' : '');
+    return '<div class="micro mudo">' + (rot ? esc(rot) + ': ' : '') + pedaco + '</div>';
+  }
+  return '';
+}
+function marcar(titulo, termos) {
+  const n = norm(titulo); let html = '', pos = 0;
+  const faixas = [];
+  termos.forEach(t => { let i = n.indexOf(t); while (i >= 0 && t) { faixas.push([i, i + t.length]); i = n.indexOf(t, i + t.length); } });
+  faixas.sort((a, b) => a[0] - b[0]).forEach(([a, b]) => { if (a < pos) return; html += esc(titulo.slice(pos, a)) + '<mark>' + esc(titulo.slice(a, b)) + '</mark>'; pos = b; });
+  return html + esc(titulo.slice(pos));
+}
+
+Vistas.busca = function () {
+  const q = App.busca, termos = norm(q).split(/\s+/).filter(Boolean);
+  const R = buscar(q, indice());
+  if (!R.length) {
+    return '<div class="vazio"><div>Nada encontrado para “' + esc(q) + '”.</div>' +
+      '<div class="micro">Tente menos palavras, ou parte do nome (ex.: “moq”, “barra”, “sábado”).</div></div>';
+  }
+  const mostrados = R.slice(0, MAX_RESULTADOS), grupos = [], idx = {};
+  mostrados.forEach(e => { if (!(e.grupo in idx)) { idx[e.grupo] = grupos.length; grupos.push({ g: e.grupo, L: [] }); } grupos[idx[e.grupo]].L.push(e); });
+  const posicao = new Map(); mostrados.forEach((e, i) => posicao.set(e, i));
+  _ultimos = mostrados;
+  return '<p class="micro mudo">' + R.length + (R.length === 1 ? ' resultado' : ' resultados') +
+    (R.length > MAX_RESULTADOS ? ' (mostrando ' + MAX_RESULTADOS + '; digite mais para afinar)' : '') + '</p>' +
+    grupos.map(g => '<section class="busca-grupo"><h2>' + esc(g.g) + ' <span class="micro mudo">' + g.L.length + '</span></h2>' +
+      g.L.map(e => '<button class="busca-item" data-acao="abrirResultado" data-i="' + posicao.get(e) + '">' +
+        '<span class="busca-tit">' + marcar(e.titulo, termos) + '</span>' +
+        (e.sub ? '<span class="meta">' + esc(e.sub) + '</span>' : '') + trechoCasado(e, termos) + '</button>').join('') +
+      '</section>').join('');
+};
+let _ultimos = [];
+
+/* ---------- barra ---------- */
+let _tBusca = 0;
+function aoDigitar(ev) {
+  const v = ev.target.value;
+  document.getElementById('busca-limpar').classList.toggle('oculto', !v);
+  clearTimeout(_tBusca);
+  _tBusca = setTimeout(() => {
+    const antes = !!App.busca;
+    App.busca = v.trim();
+    if (App.busca && !antes) window.scrollTo(0, 0);
+    render(!!App.busca);
+  }, 120);
+}
+function limparBusca(semRender) {
+  const c = document.getElementById('busca');
+  if (c) c.value = '';
+  document.getElementById('busca-limpar').classList.add('oculto');
+  App.busca = '';
+  if (!semRender) render();
+}
+Acoes.limparBusca = function () { limparBusca(); document.getElementById('busca').focus(); };
+
+/* leva ao item: troca de aba, tira o filtro que o esconderia, rola e destaca */
+function destacar(el) {
+  if (!el) return false;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('destaque'); setTimeout(() => el.classList.remove('destaque'), 2600);
+  return true;
+}
+function cartaoPorNome(nome) {
+  return [...document.querySelectorAll('#vista .cartao')].filter(c => { const h = c.querySelector('h3'); return h && norm(h.textContent) === norm(nome); })[0] || null;
+}
+Acoes.abrirResultado = function (el) {
+  const e = _ultimos[+el.dataset.i];
+  if (!e) return;
+  const a = e.alvo;
+  document.getElementById('busca').blur();
+  limparBusca(true);
+  let achou = false;
+  if (a.tipo === 'rest') {
+    const u = App.ui.comer; u.faixas = []; u.veg = false;
+    App.aba = 'comer'; render();
+    achou = destacar((a.id && document.getElementById('r-' + a.id)) || cartaoPorNome(a.nome));
+  } else if (a.tipo === 'item') {
+    App.ui.explorar.sub = a.aba; App.ui.explorar['f_' + a.aba] = 'tudo';
+    App.aba = 'explorar'; render();
+    achou = destacar((a.id && document.getElementById('i-' + a.aba + '-' + a.id)) || cartaoPorNome(a.nome));
+  } else if (a.tipo === 'info') {
+    App.ui.explorar.sub = 'Info'; App.aba = 'explorar'; render();
+    achou = destacar(document.getElementById('info-' + a.i));
+  } else if (a.tipo === 'sessao') {
+    App.ui.agenda.quem = a.pessoa; App.aba = 'agenda'; render();
+    const dia = document.getElementById('dia-' + a.dia);
+    const s = dia && ([...dia.querySelectorAll('.sessao, td.ocupado')].filter(x => norm(x.textContent + ' ' + (x.title || '')).indexOf(norm(a.titulo).slice(0, 40)) >= 0)[0]);
+    achou = destacar(s || dia);
+  } else if (a.tipo === 'gasto') {
+    App.aba = 'gastos'; render();
+    achou = destacar(document.getElementById('g-' + a.i));
+  }
+  Mem.set(CHAVE_ABA, App.aba);
+  pintarNav();
+  if (!achou) { window.scrollTo(0, 0); toast('Abri a aba, mas não achei o item na tela.', true); }
+};
+
+function iniciarBusca() {
+  const c = document.getElementById('busca');
+  c.addEventListener('input', aoDigitar);
+  c.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { ev.stopPropagation(); limparBusca(); }
+    if (ev.key === 'Enter') { ev.preventDefault(); const p = document.querySelector('#vista .busca-item'); if (p) p.click(); }
+  });
+  // "/" foca a busca no computador (fora de campo de texto)
+  document.addEventListener('keydown', ev => {
+    if (ev.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '') && !folhaAberta()) { ev.preventDefault(); c.focus(); }
+  });
+}
 </script>
 
   <script>iniciar();</script>
