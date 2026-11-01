@@ -304,7 +304,7 @@ table.comp td .prato.barato .preco { color: var(--cor-ok); font-weight: 700; }
 .saldo-linha .barra i.neg { right: 50%; background: var(--cor-erro); }
 .pos-txt { color: var(--cor-ok); }
 .neg-txt { color: var(--cor-erro); }
-.transf { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: var(--borda); font-size: var(--tam-peq); }
+.transf { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: var(--borda); font-size: var(--tam-peq); }
 .transf:last-child { border-bottom: 0; }
 .transf.meu { font-weight: 650; }
 .gasto { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 10px 0; border-bottom: var(--borda); }
@@ -1453,8 +1453,9 @@ function linhaGasto(g) {
   const podeEstornar = !g.ehEstorno && !g.estornado;
   return '<div class="gasto' + (g.ehEstorno || g.estornado ? ' estorno' : '') + '">' +
     '<div><strong>' + esc(g.descricao) + '</strong>' + (g.estornado ? ' <span class="selo erro">estornado</span>' : '') +
-    '<div class="meta">' + esc(dataBR(g.data)) + ' · pagou ' + esc(g.pagou) + ' · para ' + esc(dividirTexto(g.dividir_entre)) +
-    (g.categoria ? ' · ' + esc(g.categoria) : '') + '</div></div>' +
+    '<div class="meta">' + esc(dataBR(g.data)) + (g.categoria === 'acerto'
+      ? ' · ' + esc(g.pagou) + ' pagou a ' + esc(g.dividir_entre) + ' · acerto'
+      : ' · pagou ' + esc(g.pagou) + ' · para ' + esc(dividirTexto(g.dividir_entre)) + (g.categoria ? ' · ' + esc(g.categoria) : '')) + '</div></div>' +
     '<div class="valor">' + (g.valor == null ? '' : moeda2(Math.round(g.valor * 100))) + '</div>' +
     (podeEstornar ? '<div style="grid-column:1/-1"><button class="btn pequeno perigo" data-acao="estornar" data-reg="' + esc(g.registrado_em) + '">Estornar</button></div>' : '') + '</div>';
 }
@@ -1469,9 +1470,12 @@ Vistas.gastos = function () {
       '<span class="barra">' + (s.centavos ? '<i class="' + (s.centavos > 0 ? 'pos' : 'neg') + '" style="width:' + w + '%"></i>' : '') + '</span>' +
       '<span class="v ' + (s.centavos > 0 ? 'pos-txt' : s.centavos < 0 ? 'neg-txt' : 'mudo') + '">' + moeda2(s.centavos) + '</span></div>';
   }).join('');
+  // Só quem paga vê o "Paguei": se os dois lados apertassem, entrariam duas linhas e o saldo inverteria.
   const transf = g.transferencias.length
-    ? g.transferencias.map(t => '<div class="transf' + (souEu(t.de) || souEu(t.para) ? ' meu' : '') + '"><span>' + esc(t.de) + ' paga a ' + esc(t.para) + '</span><span class="preco">' + moeda2(t.centavos) + '</span></div>').join('')
-    : '<p class="peq mudo">Tudo quitado, ou ainda sem lançamentos.</p>';
+    ? g.transferencias.map(t => '<div class="transf' + (souEu(t.de) || souEu(t.para) ? ' meu' : '') + '"><span>' + esc(t.de) + ' paga a ' + esc(t.para) + '</span><span class="preco">' + moeda2(t.centavos) + '</span>' +
+        (souEu(t.de) ? '<div style="flex-basis:100%"><button class="btn pequeno" data-acao="paguei" data-de="' + esc(t.de) + '" data-para="' + esc(t.para) + '" data-c="' + t.centavos + '">Paguei</button></div>' : '') + '</div>').join('') +
+      '<div class="acoes">' + chipCompartilhar(textoAcerto(g.transferencias)) + '</div>'
+    : '<p class="peq mudo">' + (g.lista.length ? 'Tudo quitado.' : 'Ainda sem lançamentos.') + '</p>';
   const eu = g.saldos.filter(s => souEu(s.pessoa))[0];
   const resumoEu = eu ? '<p class="peq">' + (eu.centavos > 0 ? 'Você tem <strong class="pos-txt">' + moeda2(eu.centavos) + '</strong> a receber.'
     : eu.centavos < 0 ? 'Você deve <strong class="neg-txt">' + moeda2(-eu.centavos) + '</strong>.' : 'Você está quite.') + '</p>' : '';
@@ -1482,6 +1486,50 @@ Vistas.gastos = function () {
     '<p class="micro mudo">Verde: tem a receber. Vermelho: deve ao grupo.</p></section>' +
     '<section class="cartao"><h3>Quem paga a quem</h3><div>' + transf + '</div></section>' +
     '<section class="cartao"><h3>Lançamentos</h3><div>' + lanc + '</div></section>';
+};
+
+function textoAcerto(transf) {
+  return 'Acerto da viagem (Salvador – Socine):\n' + transf.map(t => t.de + ' paga a ' + t.para + ' ' + moeda2(t.centavos)).join('\n') +
+    '\nQuem pagou toca em "Paguei" na aba Gastos.';
+}
+function reais(c) { return (c / 100).toFixed(2).replace('.', ','); }
+
+Acoes.paguei = function (el) {
+  if (!exigirPessoa()) return;
+  const de = el.dataset.de, para = el.dataset.para, c = Number(el.dataset.c);
+  if (!souEu(de)) return;
+  const html = '<form class="form" id="form-acerto" data-form="enviarAcerto" data-de="' + esc(de) + '" data-para="' + esc(para) + '" data-c="' + c + '">' +
+    '<p>Você (' + esc(de) + ') pagou a <strong>' + esc(para) + '</strong>.</p>' +
+    '<label class="campo"><span>Valor pago (R$) *</span><input type="text" name="valor" inputmode="decimal" required value="' + reais(c) + '" autocomplete="off"></label>' +
+    '<p class="micro mudo">Pagou só uma parte? Corrija o valor. O saldo dos dois muda; o total lançado, não.</p>' +
+    '<div class="erro-form oculto" id="erro-acerto"></div>' +
+    '<button class="btn primario" type="submit">Registrar pagamento</button></form>';
+  abrirFolha('Paguei', html);
+};
+
+Acoes.enviarAcerto = async function (form) {
+  const erro = document.getElementById('erro-acerto'), de = form.dataset.de, para = form.dataset.para;
+  const valor = num(form.elements.valor.value), limite = Number(form.dataset.c);
+  erro.classList.add('oculto');
+  if (valor === null || valor <= 0) { erro.textContent = 'Informe um valor maior que zero.'; erro.classList.remove('oculto'); return; }
+  if (Math.round(valor * 100) > limite) { erro.textContent = 'Passa do que você deve a ' + para + ' (' + moeda2(limite) + ').'; erro.classList.remove('oculto'); return; }
+  const botao = form.querySelector('button[type=submit]');
+  botao.disabled = true; botao.textContent = 'Registrando…';
+  const dados = {
+    pessoa: App.pessoa, descricao: 'Acerto: ' + de + ' pagou a ' + para, valor: String(valor), pagou: de,
+    dividir_entre: [para], data: hojeISO(), categoria: 'acerto'
+  };
+  const assinatura = 'acerto|' + JSON.stringify([dados.pessoa, de, para, dados.valor, dados.data]);
+  try {
+    const r = await rpcGravar('apiLancarGasto', assinatura, dados);
+    App.dados.gastos = r.gastos;
+    Mem.set(CHAVE_CACHE, JSON.stringify(App.dados));
+    Acoes.fecharFolha(); render(true);
+    toast(r.repetido ? 'Esse pagamento já estava registrado; não entrou de novo.' : 'Pagamento registrado.');
+  } catch (e) {
+    erro.textContent = e.message; erro.classList.remove('oculto');
+    botao.disabled = false; botao.textContent = 'Registrar pagamento';
+  }
 };
 
 Acoes.novoGasto = function () {
