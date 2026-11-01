@@ -400,6 +400,23 @@ table.grade th, table.grade td, table.comp th, table.comp td { border-color: var
 .brecha { border-bottom-color: var(--cor-ok-forte); }
 .folha-caixa { border-top: 4px double var(--cor-linha); }
 
+/* celular: item de grid não encolhe abaixo do conteúdo mínimo sem isto, e o card vazava a tela */
+.cartao > *, .fatos div, .cartao-topo > * { min-width: 0; }
+.fatos { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.cartao, .alternativa, .proveniencia, .fatos dd { overflow-wrap: anywhere; }
+.cartao h3, .cartao-topo h3 { overflow-wrap: break-word; }
+@media (max-width: 560px) {
+  .topo { padding: 8px var(--esp); }
+  .topo-in { flex-wrap: wrap; align-items: center; row-gap: 6px; }
+  .topo .sobretitulo { display: none; }
+  .topo h1 { font-size: 22px; }
+  .topo-acoes { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  .topo-acoes .chip { min-height: 28px; padding: 0 8px; font-size: 10px; letter-spacing: .06em; }
+  .acoes { gap: 6px; }
+  .acoes .chip, .acoes .btn, .acoes .btn-voto { min-height: 36px; padding: 0 10px; font-size: 10.5px; letter-spacing: .06em; }
+  .cartao h3, .cartao-topo h3 { font-size: 21px; }
+}
+
 @media (min-width: 720px) {
   .folha { align-items: center; }
   .folha-caixa { border-radius: var(--raio); max-height: 88vh; }
@@ -759,7 +776,8 @@ function verificadoInfo(v) {
 /* fonte, data de acesso e selo de verificação, sempre discretos no rodapé do card */
 function proveniencia(it) {
   const f = txt(it.fonte), vi = verificadoInfo(it.verificado);
-  const fonte = f ? (urlOk(f) ? linkExterno(f) : esc(f)) : '<span title="Sem fonte registrada">sem fonte</span>';
+  // cada URL vira link curto com o nome do site (a URL inteira não quebra e alargava o card no celular)
+  const fonte = f ? f.split(/(\s+|;)/).map(p => urlOk(p) ? linkExterno(p) : esc(p)).join('') : '<span title="Sem fonte registrada">sem fonte</span>';
   return '<div class="proveniencia"><span>fonte: ' + fonte + '</span>' +
     (txt(it.acesso_em) ? '<span>acesso em ' + esc(dataBR(it.acesso_em)) + '</span>' : '') +
     '<span class="selo ' + vi.cls + '">' + vi.t + '</span>' +
