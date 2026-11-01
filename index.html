@@ -571,12 +571,21 @@ function chipLink(url, rotulo) {
 function chipCompartilhar(texto) {
   return '<a class="chip" href="' + esc(urlWhats(texto)) + '" target="_blank" rel="noopener noreferrer" data-acao="compartilhar" data-texto="' + esc(texto) + '">Compartilhar</a>';
 }
-/* chips de mapa e rota (só com endereço) e de compartilhar; vão dentro de .acoes */
+/* coluna instagram: aceita a URL do perfil ou o @; qualquer outro domínio é recusado (o link vai para o grupo todo) */
+function urlInstagram(v) {
+  const s = txt(v);
+  let m = s.match(/^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9._]{1,30})\/?(?:\?.*)?$/i);
+  if (!m) m = s.match(/^@?([A-Za-z0-9._]{1,30})$/);
+  if (!m || /^(p|reel|reels|explore|stories|accounts)$/i.test(m[1])) return '';
+  return 'https://www.instagram.com/' + m[1] + '/';
+}
+/* chips de Instagram, mapa e rota (só com endereço) e de compartilhar; vão dentro de .acoes */
 function linksLugar(it) {
   if (!txt(it.nome)) return '';
   const temEnd = !!txt(it.endereco);
   const texto = txt(it.nome) + (temEnd ? ' — ' + txt(it.endereco) : '') + '\n' + urlMapa(it);
-  return (temEnd ? chipLink(urlMapa(it), 'Ver no Maps') + chipLink(urlRotaPe(it), 'Rota a pé') + chipLink(urlOnibus(it), 'De ônibus') : '') + chipCompartilhar(texto);
+  const ig = urlInstagram(it.instagram);
+  return (ig ? chipLink(ig, 'Instagram') : '') + (temEnd ? chipLink(urlMapa(it), 'Ver no Maps') + chipLink(urlRotaPe(it), 'Rota a pé') + chipLink(urlOnibus(it), 'De ônibus') : '') + chipCompartilhar(texto);
 }
 // navigator.share dentro do iframe do Apps Script depende do allow "web-share"; sem ele, vai direto ao wa.me.
 function podeShare() {
@@ -1352,7 +1361,7 @@ Acoes.abrirComparacao = function () {
   <script>
 /* ====================== EXPLORAR (Passeios, Museus, Praias, Noite, Info), VOTOS e SUGESTÕES ====================== */
 const SUBS = ['Passeios', 'Museus', 'Praias', 'Noite', 'Info'];
-const OCULTAS = ['id', 'nome', 'descricao', 'fonte', 'acesso_em', 'verificado', 'sugerido_por', 'alternativa_id', 'alternativa_porque', 'link', 'link_cardapio', 'tipo', 'bairro'];
+const OCULTAS = ['id', 'nome', 'descricao', 'fonte', 'acesso_em', 'verificado', 'sugerido_por', 'alternativa_id', 'alternativa_porque', 'link', 'link_cardapio', 'tipo', 'bairro', 'instagram'];
 
 Acoes.sub = function (el) { App.ui.explorar.sub = el.dataset.sub; render(); window.scrollTo(0, 0); };
 
@@ -1672,7 +1681,7 @@ Acoes.estornar = async function (el) {
 /* ====================== BUSCA (tudo do app numa barra só) ====================== */
 // Sem acento e sem maiúscula; todas as palavras digitadas precisam aparecer (em qualquer campo do item).
 const MAX_RESULTADOS = 80;
-const CAMPOS_FORA = ['id', 'fonte', 'acesso_em', 'verificado', 'link', 'link_cardapio', 'alternativa_id', 'lat', 'lng'];
+const CAMPOS_FORA = ['id', 'fonte', 'acesso_em', 'verificado', 'link', 'link_cardapio', 'alternativa_id', 'lat', 'lng', 'instagram'];
 // Palavras que o amigo digita e a planilha escreve de outro jeito.
 const APELIDOS = [
   [/barco|lancha|escuna|catamar|saveiro|ferry|travessia/, 'barco passeio de barco'],
