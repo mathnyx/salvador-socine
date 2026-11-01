@@ -770,7 +770,8 @@ const ROTULOS = {
   distancia_base_km: 'distância da base', tempo_pe_min: 'a pé', uber_total: 'Uber (total)', uber_pp: 'Uber por pessoa', onibus: 'ônibus',
   horario: 'horário', aceita_grupo_9: 'grupo de 9', veg: 'veg', nota: 'nota', preco_inteira: 'inteira', preco_meia: 'meia',
   horario_funcionamento: 'horário', dias_fechado: 'fechado', duracao_min: 'duração', estrutura: 'estrutura', melhor_horario: 'melhor horário',
-  seguranca: 'segurança', mar: 'mar', data_evento: 'data', inicio: 'início', tipo: 'tipo', fechado_em: 'fechado na viagem'
+  seguranca: 'segurança', mar: 'mar', data_evento: 'data', inicio: 'início', tipo: 'tipo', fechado_em: 'fechado na viagem',
+  preco: 'preço', ponto_saida: 'sai de'
 };
 function rotuloDe(h) { return ROTULOS[h] || h.replace(/_/g, ' '); }
 function valorDe(h, v) {
@@ -1351,6 +1352,14 @@ function infoHtml() {
     '</section>').join('');
 }
 
+// Filtros dentro da aba: Praias separa praia de barco; Noite separa evento com data de bar/casa fixa.
+const ehBarco = it => /barco|travessia|lancha|escuna|catamar|saveiro|ferry/i.test(txt(it.tipo));
+const FILTROS = {
+  Praias: [['tudo', 'Tudo', () => true], ['praia', 'Praias', it => !ehBarco(it)], ['barco', 'Barcos', ehBarco]],
+  Noite: [['tudo', 'Tudo', () => true], ['data', 'Com data', it => !!txt(it.data_evento)], ['fixo', 'Bares e casas', it => !txt(it.data_evento)]]
+};
+Acoes.filtroSub = function (el) { App.ui.explorar['f_' + App.ui.explorar.sub] = el.dataset.f; render(); };
+
 Vistas.explorar = function () {
   const sub = App.ui.explorar.sub;
   const chips = '<div class="fila rolagem">' + SUBS.map(s =>
@@ -1359,10 +1368,20 @@ Vistas.explorar = function () {
   const aba = App.dados.listas[sub];
   let L = itensDe(sub);
   if (sub === 'Noite') L = L.slice().sort((a, b) => (txt(a.data_evento) + txt(a.inicio)) < (txt(b.data_evento) + txt(b.inicio)) ? -1 : 1);
+  let filtro = '';
+  if (FILTROS[sub]) {
+    const atual = App.ui.explorar['f_' + sub] || 'tudo', f = FILTROS[sub].filter(x => x[0] === atual)[0] || FILTROS[sub][0];
+    const contados = FILTROS[sub].map(x => [x, L.filter(x[2]).length]);
+    if (contados.every(c => c[1] > 0)) {
+      filtro = '<div class="fila rolagem">' + contados.map(([x, n]) =>
+        '<button class="chip" data-acao="filtroSub" data-f="' + x[0] + '" aria-pressed="' + (x[0] === f[0]) + '">' + x[1] + ' (' + n + ')</button>').join('') + '</div>';
+      L = L.filter(f[2]);
+    }
+  }
   const corpo = L.length ? L.map(it => cartaoGenerico(sub, it, aba.cabecalhos)).join('')
     : '<div class="vazio"><div>Ainda não há itens em ' + esc(sub) + '. O conteúdo está sendo levantado.</div><button class="btn primario" data-acao="sugerir" data-aba="' + sub + '">Sugerir um lugar</button></div>';
   return chips + '<div class="fila" style="justify-content:space-between"><h2>' + esc(sub) + '</h2>' +
-    (L.length ? '<button class="btn pequeno" data-acao="sugerir" data-aba="' + sub + '">Sugerir</button>' : '') + '</div>' + corpo;
+    (L.length ? '<button class="btn pequeno" data-acao="sugerir" data-aba="' + sub + '">Sugerir</button>' : '') + '</div>' + filtro + corpo;
 };
 
 /* ---------- Votos ---------- */
